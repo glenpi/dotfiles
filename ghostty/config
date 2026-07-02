@@ -1,0 +1,5 @@
+theme = TokyoNight Night
+
+unfocused-split-opacity = 0.4
+unfocused-split-fill = 000000
+split-divider-color = ff6600
