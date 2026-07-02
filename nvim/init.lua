@@ -64,6 +64,23 @@ vim.api.nvim_create_autocmd("LspAttach", {
   end,
 })
 
+-- Open Claude Code in a vertical terminal split, pre-filled with a prompt
+-- referencing the current file (claude's "@path" context syntax). The
+-- closing quote is sent then the cursor is moved back inside it (via a
+-- terminal cursor-left escape) so you can type your ask and hit <CR> to run.
+vim.keymap.set("n", "<leader>cc", function()
+  local file = vim.fn.expand("%:.")
+  if file == "" then
+    vim.notify("No file in this buffer", vim.log.levels.WARN)
+    return
+  end
+  vim.cmd("vsplit")
+  vim.cmd("terminal")
+  vim.fn.chansend(vim.b.terminal_job_id, 'claude "@' .. file .. '"')
+  vim.fn.chansend(vim.b.terminal_job_id, "\x1b[D")
+  vim.cmd("startinsert")
+end, { desc = "Claude Code: open with current file as context" })
+
 -- render-markdown.nvim renders markdown (headers, bold/italic, checkboxes,
 -- tables, code blocks) inline in the buffer for viewing, not raw text.
 -- It relies on nvim-treesitter for the markdown/markdown_inline parsers.
