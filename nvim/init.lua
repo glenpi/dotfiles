@@ -11,7 +11,12 @@ vim.diagnostic.config({ virtual_text = true })
 
 -- Fuzzy-match native completion (Neovim 0.11+) so typing e.g. "wrst" can
 -- still surface "WriteString" instead of only matching by strict prefix.
-vim.opt.completeopt = { "menuone", "noselect", "popup", "fuzzy" }
+-- No "noselect": the first entry is pre-selected so <CR> (mapped below to
+-- <C-y> when the popup is visible) accepts it directly. "noinsert" keeps
+-- that selection from being written into the buffer as you type/navigate --
+-- without it, the highlighted candidate's text is inserted live, so any key
+-- that dismisses the popup (not just <CR>) leaves it behind.
+vim.opt.completeopt = { "menuone", "noinsert", "popup", "fuzzy" }
 
 -- <CR> confirms the highlighted completion entry when the popup menu is
 -- open; otherwise it's a normal newline. Native completion doesn't bind
@@ -31,6 +36,12 @@ end, { expr = true, noremap = true })
 vim.keymap.set("i", "<D-k>", function()
   return vim.fn.pumvisible() == 1 and "<C-p>" or "<D-k>"
 end, { expr = true, noremap = true })
+
+-- Toggle for the eager-identifier-completion autocmd set up below (in
+-- LspAttach). Flip to false if the popup showing up while typing plain
+-- words gets annoying -- see the comment down there for the tradeoffs.
+local eager_identifier_completion = true
+local ident_completion_timers = {}
 
 -- nvim-lspconfig is installed as an "opt" package, so load it explicitly.
 vim.cmd("packadd nvim-lspconfig")
@@ -55,6 +66,40 @@ vim.api.nvim_create_autocmd("LspAttach", {
     vim.keymap.set("i", "<C-Space>", function()
       vim.lsp.completion.get()
     end, opts)
+
+    -- Eager auto-popup on plain identifiers too (e.g. typing "appe" shows
+    -- append/appends), not just after ".". Tradeoffs vs. the <C-Space>-only
+    -- approach above: sends a completion request to gopls on every word
+    -- character typed (debounced 100ms) instead of only on "."; no syntax
+    -- awareness, so it also pops the menu inside comments/strings and while
+    -- naming new variables; and combined with the <CR> remap up top,
+    -- pressing Enter right after a word can confirm a completion instead of
+    -- inserting a newline if the menu happened to be open. Set
+    -- eager_identifier_completion to false above to turn this off again.
+    if eager_identifier_completion then
+      vim.api.nvim_create_autocmd("InsertCharPre", {
+        buffer = bufnr,
+        callback = function()
+          if vim.fn.pumvisible() ~= 0 or not vim.v.char:match("[%w_]") then
+            return
+          end
+          local timer = ident_completion_timers[bufnr]
+          if timer then
+            timer:stop()
+            timer:close()
+          end
+          timer = vim.uv.new_timer()
+          ident_completion_timers[bufnr] = timer
+          timer:start(
+            100,
+            0,
+            vim.schedule_wrap(function()
+              vim.lsp.completion.get()
+            end)
+          )
+        end,
+      })
+    end
 
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
     vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
@@ -88,6 +133,17 @@ vim.cmd("packadd nvim-treesitter")
 vim.cmd("packadd render-markdown.nvim")
 require("render-markdown").setup({})
 
+-- Display tabs as 4 columns wide in Go files. This is purely visual -- the
+-- file on disk still stores tabs (gofmt always emits tabs, unconfigurably),
+-- this just changes how wide a tab renders in this editor.
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "go",
+  callback = function()
+    vim.bo.tabstop = 4
+    vim.bo.shiftwidth = 4
+  end,
+})
+
 -- On save of a Go file: organize imports, then format.
 vim.api.nvim_create_autocmd("BufWritePre", {
   pattern = "*.go",
@@ -103,6 +159,17 @@ vim.api.nvim_create_autocmd("BufWritePre", {
         end
       end
     end
+    vim.lsp.buf.format({ async = false })
+  end,
+})
+
+-- Also gofmt whenever you leave Insert mode, not just on save, so the
+-- buffer stays formatted while you're still working on it. Synchronous:
+-- gopls formatting a single file is fast, and needs to land before you
+-- start typing again (an async edit landing mid-keystroke would be janky).
+vim.api.nvim_create_autocmd("InsertLeave", {
+  pattern = "*.go",
+  callback = function()
     vim.lsp.buf.format({ async = false })
   end,
 })
