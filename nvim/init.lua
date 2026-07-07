@@ -148,6 +148,15 @@ vim.keymap.set("n", "<leader>claude", function()
   vim.cmd("startinsert")
 end, { desc = "Claude Code: open with current file as context" })
 
+-- fzf-lua: fuzzy file/text finder, backed by the fzf, fd and rg binaries
+-- (installed via `brew install fzf fd ripgrep`). <leader>ff fuzzy-matches
+-- filenames (fd for listing, so .gitignore'd files are skipped); <leader>fg
+-- live-greps file contents (rg).
+vim.cmd("packadd fzf-lua")
+require("fzf-lua").setup({})
+vim.keymap.set("n", "<leader>ff", require("fzf-lua").files, { desc = "fzf-lua: find files" })
+vim.keymap.set("n", "<leader>fg", require("fzf-lua").live_grep, { desc = "fzf-lua: live grep" })
+
 -- render-markdown.nvim renders markdown (headers, bold/italic, checkboxes,
 -- tables, code blocks) inline in the buffer for viewing, not raw text.
 -- It relies on nvim-treesitter for the markdown/markdown_inline parsers.
