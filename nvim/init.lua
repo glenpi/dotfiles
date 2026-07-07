@@ -6,8 +6,9 @@ vim.cmd.colorscheme("retrobox")
 vim.opt.number = true
 -- vim.opt.relativenumber = true
 
--- Show diagnostic messages inline at the end of the line.
-vim.diagnostic.config({ virtual_text = true })
+-- Show diagnostic messages as wrapped lines below the code line, instead of
+-- clipped virtual_text at the end of the line.
+vim.diagnostic.config({ virtual_text = false, virtual_lines = { only_current_line = true } })
 
 -- Fuzzy-match native completion (Neovim 0.11+) so typing e.g. "wrst" can
 -- still surface "WriteString" instead of only matching by strict prefix.
@@ -49,6 +50,27 @@ vim.cmd("packadd nvim-lspconfig")
 -- Enable the gopls server. nvim-lspconfig ships lsp/gopls.lua, which sets
 -- the command, filetypes (go, gomod, gowork, gotmpl) and root detection.
 vim.lsp.enable("gopls")
+
+-- Enable zls (Zig Language Server, installed via `brew install zls`).
+-- nvim-lspconfig ships lsp/zls.lua, which sets the command, filetype (zig)
+-- and root detection (build.zig / build.zig.zon).
+vim.lsp.enable("zls")
+
+-- Enable rust-analyzer (installed via `rustup component add rust-analyzer`).
+-- nvim-lspconfig ships lsp/rust_analyzer.lua, which sets the command,
+-- filetype (rust) and root detection (Cargo.toml / rust-project.json).
+vim.lsp.enable("rust_analyzer")
+
+-- Python: two servers, same split of duties as elsewhere (a type/nav server
+-- plus a fast separate linter/formatter). basedpyright (installed via
+-- `uv tool install basedpyright`) gives hover/go-to-def/rename/type
+-- diagnostics. nvim-lspconfig ships lsp/basedpyright.lua.
+vim.lsp.enable("basedpyright")
+
+-- ruff (installed via `uv tool install ruff`) gives lint diagnostics plus
+-- the format/organize-imports code actions used in the on-save autocmd
+-- below. nvim-lspconfig ships lsp/ruff.lua.
+vim.lsp.enable("ruff")
 
 -- LSP keymaps + Go-specific autoformat, wired up once a server attaches.
 vim.api.nvim_create_autocmd("LspAttach", {
@@ -113,7 +135,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
 -- referencing the current file (claude's "@path" context syntax). The
 -- closing quote is sent then the cursor is moved back inside it (via a
 -- terminal cursor-left escape) so you can type your ask and hit <CR> to run.
-vim.keymap.set("n", "<leader>cc", function()
+vim.keymap.set("n", "<leader>claude", function()
   local file = vim.fn.expand("%:.")
   if file == "" then
     vim.notify("No file in this buffer", vim.log.levels.WARN)
@@ -163,13 +185,49 @@ vim.api.nvim_create_autocmd("BufWritePre", {
   end,
 })
 
--- Also gofmt whenever you leave Insert mode, not just on save, so the
--- buffer stays formatted while you're still working on it. Synchronous:
--- gopls formatting a single file is fast, and needs to land before you
--- start typing again (an async edit landing mid-keystroke would be janky).
-vim.api.nvim_create_autocmd("InsertLeave", {
-  pattern = "*.go",
+-- zig fmt on save. No organize-imports step here -- Zig has no equivalent
+-- code action (imports are just `const x = @import(...)` declarations, not
+-- a separate managed block gofmt-style tooling would reorder).
+vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = "*.zig",
   callback = function()
     vim.lsp.buf.format({ async = false })
+  end,
+})
+
+-- rustfmt on save, via rust-analyzer's formatting request (same mechanism as
+-- `cargo fmt`, just applied in-buffer instead of shelling out).
+vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = "*.rs",
+  callback = function()
+    vim.lsp.buf.format({ async = false })
+  end,
+})
+
+-- On save of a Python file: organize imports via ruff's code action, then
+-- format with ruff specifically (not vim.lsp.buf.format, which would let
+-- basedpyright answer the formatting request first since it's also
+-- attached -- basedpyright doesn't format, so that silently no-ops).
+vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = "*.py",
+  callback = function()
+    local params = vim.lsp.util.make_range_params(0, "utf-8")
+    -- ruff's server requires `diagnostics` per the LSP spec (gopls, used by
+    -- the equivalent Go autocmd above, tolerates it being omitted -- ruff
+    -- doesn't and rejects the request with a JSON parsing failure).
+    params.context = { only = { "source.organizeImports" }, diagnostics = {} }
+    local result = vim.lsp.buf_request_sync(0, "textDocument/codeAction", params, 1000)
+    for _, res in pairs(result or {}) do
+      for _, action in pairs(res.result or {}) do
+        if action.edit then
+          vim.lsp.util.apply_workspace_edit(action.edit, "utf-8")
+        end
+      end
+    end
+
+    local ruff_clients = vim.lsp.get_clients({ bufnr = 0, name = "ruff" })
+    if #ruff_clients > 0 then
+      vim.lsp.buf.format({ async = false, id = ruff_clients[1].id })
+    end
   end,
 })
