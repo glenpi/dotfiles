@@ -6,6 +6,11 @@ vim.cmd.colorscheme("retrobox")
 vim.opt.number = true
 -- vim.opt.relativenumber = true
 
+-- Route yank/delete/paste through the system clipboard (via pbcopy/pbpaste
+-- on macOS) instead of only vim's internal unnamed register, so `y` in nvim
+-- can be pasted elsewhere with Cmd-V and vice versa.
+vim.opt.clipboard = "unnamedplus"
+
 -- Show diagnostic messages as wrapped lines below the code line, instead of
 -- clipped virtual_text at the end of the line.
 vim.diagnostic.config({ virtual_text = false, virtual_lines = { only_current_line = true } })
