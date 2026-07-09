@@ -10,6 +10,7 @@ vim.opt.number = true
 -- on macOS) instead of only vim's internal unnamed register, so `y` in nvim
 -- can be pasted elsewhere with Cmd-V and vice versa.
 vim.opt.clipboard = "unnamedplus"
+
 -- Let netrw (:Explore) change the actual working directory as you browse,
 -- instead of only updating its own internal listing -- so shell commands
 -- run from nvim (:!) and relative paths follow wherever you've navigated to.
@@ -137,6 +138,18 @@ vim.api.nvim_create_autocmd("LspAttach", {
     vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
     vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, opts)
     vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
+
+    -- rust-analyzer-specific: force it to re-run `cargo metadata` and pick
+    -- up newly created files (e.g. a fresh src/bin/*.rs) without needing to
+    -- close/reopen the buffer or restart the whole LSP client.
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if client and client.name == "rust_analyzer" then
+      vim.keymap.set("n", "<leader>rw", function()
+        vim.lsp.buf_request(bufnr, "rust-analyzer/reloadWorkspace", vim.NIL, function()
+          vim.notify("rust-analyzer: workspace reloaded")
+        end)
+      end, vim.tbl_extend("force", opts, { desc = "rust-analyzer: reload workspace" }))
+    end
   end,
 })
 
