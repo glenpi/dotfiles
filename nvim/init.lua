@@ -6,6 +6,11 @@ vim.cmd.colorscheme("retrobox")
 vim.opt.number = true
 -- vim.opt.relativenumber = true
 
+-- Let netrw (:Explore) change the actual working directory as you browse,
+-- instead of only updating its own internal listing -- so shell commands
+-- run from nvim (:!) and relative paths follow wherever you've navigated to.
+vim.g.netrw_keepdir = 0
+
 -- Show diagnostic messages as wrapped lines below the code line, instead of
 -- clipped virtual_text at the end of the line.
 vim.diagnostic.config({ virtual_text = false, virtual_lines = { only_current_line = true } })
