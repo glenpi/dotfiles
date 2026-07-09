@@ -6,6 +6,10 @@ vim.cmd.colorscheme("retrobox")
 vim.opt.number = true
 -- vim.opt.relativenumber = true
 
+-- Route yank/delete/paste through the system clipboard (via pbcopy/pbpaste
+-- on macOS) instead of only vim's internal unnamed register, so `y` in nvim
+-- can be pasted elsewhere with Cmd-V and vice versa.
+vim.opt.clipboard = "unnamedplus"
 -- Let netrw (:Explore) change the actual working directory as you browse,
 -- instead of only updating its own internal listing -- so shell commands
 -- run from nvim (:!) and relative paths follow wherever you've navigated to.
