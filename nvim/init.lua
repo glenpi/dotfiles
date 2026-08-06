@@ -16,6 +16,67 @@ vim.opt.clipboard = "unnamedplus"
 -- run from nvim (:!) and relative paths follow wherever you've navigated to.
 vim.g.netrw_keepdir = 0
 
+-- netrw as the file tree (no plugin). liststyle 3 is the nested tree view.
+vim.g.netrw_liststyle = 3
+vim.g.netrw_banner = 0 -- hide the top banner
+vim.g.netrw_winsize = 25 -- left split width, in percent
+
+-- 4 = "open in the previous window", i.e. whichever code window you were
+-- last in, so the sidebar itself is never replaced. Not 0: that reuses one
+-- pinned window, which with two or more splits open means every <CR> lands
+-- in the same split and the others become unreachable from the tree.
+vim.g.netrw_browse_split = 4
+vim.g.netrw_altfile = 1 -- keep <C-^> pointing at the real previous file, not netrw
+
+-- Toggle the sidebar. :Lexplore is netrw's own left-split explorer, and
+-- calling it again closes it.
+vim.keymap.set("n", "<leader>e", ":Lexplore<cr>", { silent = true, desc = "netrw: toggle file tree" })
+
+-- netrw's built-in `%` (create file) opens the new file in the netrw window
+-- itself, ignoring netrw_browse_split, which leaves the sidebar showing a
+-- buffer instead of the tree. Override it to create the file and edit it in
+-- the previous window -- and to make a directory instead when the name ends
+-- in "/".
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "netrw",
+  callback = function()
+    vim.keymap.set("n", "%", function()
+      local fname = vim.fn.input("Enter filename: ")
+      if fname == "" then
+        return
+      end
+
+      local dir = vim.b.netrw_curdir or vim.fn.getcwd()
+      local path = dir .. "/" .. fname
+
+      if vim.fn.filereadable(path) == 1 or vim.fn.isdirectory(path) == 1 then
+        vim.notify("Already exists: " .. fname, vim.log.levels.WARN)
+        return
+      end
+
+      if fname:match("/$") then
+        vim.fn.mkdir(path, "p")
+        vim.cmd("edit") -- reload the listing so the new dir shows up
+      else
+        local f = io.open(path, "w")
+        if not f then
+          vim.notify("Failed to create: " .. fname, vim.log.levels.ERROR)
+          return
+        end
+        f:close()
+
+        local escaped = vim.fn.fnameescape(path)
+        if vim.fn.winnr("#") == 0 then
+          vim.cmd("edit " .. escaped)
+        else
+          vim.cmd("wincmd p")
+          vim.cmd("edit " .. escaped)
+        end
+      end
+    end, { buffer = true, silent = true, noremap = true, desc = "netrw: create file in previous window" })
+  end,
+})
+
 -- Show diagnostic messages as wrapped lines below the code line, instead of
 -- clipped virtual_text at the end of the line.
 vim.diagnostic.config({ virtual_text = false, virtual_lines = { only_current_line = true } })
@@ -262,3 +323,75 @@ vim.api.nvim_create_autocmd("BufWritePre", {
     end
   end,
 })
+
+-- Statusline: mode | git branch | repo-relative path .... diagnostics ft l:c
+-- Built with %! so the whole line is re-evaluated on every redraw, which is
+-- what lets the mode indicator and cursor position stay live without any
+-- plugin. Colors are derived from whatever colorscheme is loaded (retrobox
+-- above) rather than hardcoded, so it doesn't clash if that changes.
+local pms = vim.api.nvim_get_hl(0, { name = "PmenuSel", link = false })
+local dir_hl = vim.api.nvim_get_hl(0, { name = "Directory", link = false })
+local vis = vim.api.nvim_get_hl(0, { name = "Visual", link = false })
+vim.api.nvim_set_hl(0, "StlMode", { fg = pms.fg, bg = vis.bg })
+vim.api.nvim_set_hl(0, "StlGit", { fg = dir_hl.fg, bg = pms.bg })
+
+local modes = {
+  n = "NORMAL",
+  i = "INSERT",
+  v = "VISUAL",
+  V = "V-LINE",
+  ["\22"] = "V-BLOCK", -- <C-v>
+  c = "COMMAND",
+  t = "TERMINAL",
+  R = "REPLACE",
+  s = "SELECT",
+  S = "S-LINE",
+  ["\19"] = "S-BLOCK", -- <C-s>
+}
+
+function _G._statusline()
+  local mode = modes[vim.fn.mode()] or vim.fn.mode():upper()
+  local branch = vim.b.git_branch and "%#StlGit#  " .. vim.b.git_branch .. " %*" or ""
+  local path = vim.b.rel_path or "%f"
+
+  -- vim.diagnostic.count returns a severity-indexed table; 1..4 are
+  -- ERROR/WARN/INFO/HINT. Only non-zero counts get a segment.
+  local diag = ""
+  local labels = { " ", " ", " ", " " }
+  local hls = { "DiagnosticError", "DiagnosticWarn", "DiagnosticInfo", "DiagnosticHint" }
+  local counts = vim.diagnostic.count(0) or {}
+  for i = 1, 4 do
+    if counts[i] and counts[i] > 0 then
+      diag = diag .. "%#" .. hls[i] .. "#" .. labels[i] .. counts[i] .. "%* "
+    end
+  end
+
+  return "%#StlMode# " .. mode .. " %*" .. branch .. " " .. path .. "%=" .. diag .. vim.bo.filetype .. " %l:%c"
+end
+
+-- Cache the branch and repo-relative path per buffer instead of computing
+-- them inside _statusline(), which runs on every single redraw.
+-- ponytail: two synchronous `git` spawns per BufEnter -- unnoticeable
+-- locally, switch to vim.system() async if it ever stutters on a network FS.
+vim.api.nvim_create_autocmd("BufEnter", {
+  callback = function()
+    local root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("%s+$", "")
+    if root ~= "" then
+      vim.b.git_branch = vim.fn.system("git branch --show-current 2>/dev/null"):gsub("%s+$", "")
+      vim.b.rel_path = vim.fn.expand("%:p"):sub(#root + 2)
+    else
+      vim.b.git_branch = nil
+      vim.b.rel_path = vim.fn.expand("%:p:~")
+    end
+  end,
+})
+
+-- Diagnostics arrive asynchronously from the LSP, which isn't a redraw
+-- trigger on its own -- without this the counts lag until the next keypress.
+vim.api.nvim_create_autocmd("DiagnosticChanged", {
+  callback = function()
+    vim.cmd("redrawstatus!")
+  end,
+})
+
+vim.o.statusline = "%!v:lua._statusline()"
