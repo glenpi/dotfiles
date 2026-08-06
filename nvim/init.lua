@@ -332,7 +332,11 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 local pms = vim.api.nvim_get_hl(0, { name = "PmenuSel", link = false })
 local dir_hl = vim.api.nvim_get_hl(0, { name = "Directory", link = false })
 local vis = vim.api.nvim_get_hl(0, { name = "Visual", link = false })
-vim.api.nvim_set_hl(0, "StlMode", { fg = pms.fg, bg = vis.bg })
+local nrm = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+-- Fall back to Normal's fg: retrobox (and other schemes) define PmenuSel with
+-- only a bg, and an unset fg here renders the mode text nearly black against
+-- Visual's dark bg.
+vim.api.nvim_set_hl(0, "StlMode", { fg = pms.fg or nrm.fg, bg = vis.bg, bold = true })
 vim.api.nvim_set_hl(0, "StlGit", { fg = dir_hl.fg, bg = pms.bg })
 
 local modes = {
