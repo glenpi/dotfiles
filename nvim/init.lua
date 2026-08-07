@@ -19,7 +19,7 @@ vim.g.netrw_keepdir = 0
 -- netrw as the file tree (no plugin). liststyle 3 is the nested tree view.
 vim.g.netrw_liststyle = 3
 vim.g.netrw_banner = 0 -- hide the top banner
-vim.g.netrw_winsize = 25 -- left split width, in percent
+vim.g.netrw_winsize = 20 -- left split width, in percent
 
 -- 4 = "open in the previous window", i.e. whichever code window you were
 -- last in, so the sidebar itself is never replaced. Not 0: that reuses one
@@ -31,6 +31,27 @@ vim.g.netrw_altfile = 1 -- keep <C-^> pointing at the real previous file, not ne
 -- Toggle the sidebar. :Lexplore is netrw's own left-split explorer, and
 -- calling it again closes it.
 vim.keymap.set("n", "<leader>e", ":Lexplore<cr>", { silent = true, desc = "netrw: toggle file tree" })
+
+-- `nvim .` (or any directory argument) hands netrw the whole window rather
+-- than the sidebar layout, so the first file you open replaces the tree
+-- instead of appearing beside it. Convert it on startup: blank out the main
+-- pane and reopen the tree via :Lexplore, giving the same left rail /
+-- netrw_winsize ratio you get from <leader>e. The argc check keeps a bare
+-- `nvim` out of this -- with no buffer name, "%:p" expands to the cwd and
+-- would otherwise look like a directory argument.
+vim.api.nvim_create_autocmd("VimEnter", {
+  callback = function()
+    local path = vim.fn.expand("%:p")
+    if vim.fn.argc() ~= 1 or vim.fn.isdirectory(path) == 0 then
+      return
+    end
+    local dirbuf = vim.api.nvim_get_current_buf()
+    vim.cmd("cd " .. vim.fn.fnameescape(path))
+    vim.cmd("enew") -- empty main pane for files to open into
+    pcall(vim.api.nvim_buf_delete, dirbuf, { force = true })
+    vim.cmd("Lexplore")
+  end,
+})
 
 -- netrw's built-in `%` (create file) opens the new file in the netrw window
 -- itself, ignoring netrw_browse_split, which leaves the sidebar showing a
