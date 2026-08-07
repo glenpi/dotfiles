@@ -53,6 +53,161 @@ vim.api.nvim_create_autocmd("VimEnter", {
   end,
 })
 
+-- Closing the last file window leaves the tree as the only window, where it
+-- stretches to full width and stops acting like a sidebar. netrw then has no
+-- window to open into, so its one-window fallback (s:NetrwPrevWinOpen) carves
+-- a horizontal split sized by netrw_winsize -- a 4-line strip above the tree
+-- rather than a pane beside it. Restore the empty main pane instead, which
+-- also gives netrw_browse_split = 4 something to target again.
+vim.api.nvim_create_autocmd("WinClosed", {
+  callback = function()
+    -- WinClosed fires while the window still exists, so the count is only
+    -- correct once it's actually gone.
+    vim.schedule(function()
+      if vim.v.exiting ~= vim.NIL then
+        return
+      end
+      local wins = vim.api.nvim_tabpage_list_wins(0)
+      if #wins ~= 1 or vim.bo[vim.api.nvim_win_get_buf(wins[1])].filetype ~= "netrw" then
+        return
+      end
+      vim.cmd("botright vnew") -- empty pane on the right
+      vim.cmd("wincmd h") -- back to the tree, ready to pick
+      vim.cmd("vertical resize " .. math.floor(vim.o.columns * vim.g.netrw_winsize / 100))
+    end)
+  end,
+})
+
+-- Follow the focused file in the sidebar: move the tree's cursor onto
+-- whichever file you switch to, expanding parent directories along the way,
+-- so the highlighted line always reflects the active split. netrw already
+-- sets 'cursorline' in its window (netrw_cursor defaults to 2) and that
+-- highlight renders even while the window is unfocused, so once the cursor is
+-- on the right line there's nothing further to draw.
+local function netrw_win()
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.bo[vim.api.nvim_win_get_buf(w)].filetype == "netrw" then
+      return w
+    end
+  end
+end
+
+-- Tree listing indents one "| " per level, e.g. "| | inner.go" at depth 2.
+local function depth_of(line)
+  local d = 0
+  while line:sub(1, 2) == "| " do
+    d, line = d + 1, line:sub(3)
+  end
+  return d
+end
+
+-- Find `name` at `depth`, scanning only from `from` until indentation rises
+-- back out of the enclosing directory. Name plus depth is NOT unique -- two
+-- files with the same name at the same depth under different parents render as
+-- identical lines -- so the descent below narrows the range at every level.
+local function tree_line(win, name, depth, from)
+  local want = string.rep("| ", depth) .. name
+  local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
+  for i = from, #lines do
+    if depth_of(lines[i]) < depth then
+      return nil -- left the parent's subtree without a match
+    end
+    if lines[i] == want then
+      return i
+    end
+  end
+end
+
+local function reveal_in_tree(win, file)
+  local ok, treetop = pcall(vim.api.nvim_win_get_var, win, "netrw_treetop")
+  if not ok or type(treetop) ~= "string" or treetop == "" then
+    return
+  end
+  treetop = (vim.fn.fnamemodify(treetop, ":p"):gsub("/$", ""))
+  -- Nothing to reveal for a file outside the tree's root.
+  if file:sub(1, #treetop + 1) ~= treetop .. "/" then
+    return
+  end
+
+  local parts = vim.split(file:sub(#treetop + 2), "/", { plain = true })
+
+  -- Start below the tree root's own line: the listing opens with "../" and the
+  -- root, both at depth 0, and scanning from line 1 would stop instantly.
+  local from = 1
+  for i, line in ipairs(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)) do
+    if depth_of(line) == 0 and line ~= "../" then
+      from = i + 1
+      break
+    end
+  end
+
+  -- Walk down the path, expanding any ancestor netrw hasn't opened yet.
+  -- w:netrw_treedict is keyed by expanded directory (absolute, no trailing
+  -- slash), so it answers "already open?" directly -- which matters because
+  -- netrw's <CR> toggles, and pressing it on an open directory collapses it.
+  local dir = treetop
+  for i = 1, #parts do
+    local is_dir = i < #parts
+    local name = parts[i] .. (is_dir and "/" or "")
+    local ln = tree_line(win, name, i, from)
+    if not is_dir then
+      if ln then
+        pcall(vim.api.nvim_win_set_cursor, win, { ln, 0 })
+      end
+      return
+    end
+
+    dir = dir .. "/" .. parts[i]
+    local dict = select(2, pcall(vim.api.nvim_win_get_var, win, "netrw_treedict"))
+    if type(dict) ~= "table" or dict[dir] == nil then
+      if not ln then
+        return
+      end
+      vim.api.nvim_win_set_cursor(win, { ln, 0 })
+      vim.api.nvim_win_call(win, function()
+        vim.cmd("normal \r") -- no bang: netrw's own <CR> mapping does the expand
+      end)
+      ln = tree_line(win, name, i, from) -- listing re-rendered
+    end
+    if not ln then
+      return
+    end
+    from = ln + 1 -- descend into this directory's subtree
+  end
+end
+
+local syncing_tree = false
+
+vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+  callback = function()
+    -- Expanding re-renders the listing and fires these same events.
+    if syncing_tree then
+      return
+    end
+    -- Only real files: skip netrw itself, terminals, help, quickfix, [No Name].
+    if vim.bo.buftype ~= "" or vim.bo.filetype == "netrw" then
+      return
+    end
+    local file = vim.api.nvim_buf_get_name(0)
+    if file == "" then
+      return
+    end
+    local win = netrw_win()
+    if not win then
+      return
+    end
+    -- netrw_keepdir = 0 lets netrw move the cwd as it browses, which is wanted
+    -- when *you* navigate but not as a side effect of automatic syncing.
+    local cwd = vim.fn.getcwd()
+    syncing_tree = true
+    pcall(reveal_in_tree, win, file)
+    syncing_tree = false
+    if vim.fn.getcwd() ~= cwd then
+      vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+    end
+  end,
+})
+
 -- netrw's built-in `%` (create file) opens the new file in the netrw window
 -- itself, ignoring netrw_browse_split, which leaves the sidebar showing a
 -- buffer instead of the tree. Override it to create the file and edit it in
